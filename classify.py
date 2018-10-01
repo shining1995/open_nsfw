@@ -16,6 +16,14 @@ from StringIO import StringIO
 import caffe
 
 
+def get_file(path):
+    for root, dirs, files in os.walk(path):
+        if files is not None:
+            return files
+        else:
+            return None
+
+
 def resize_image(data, sz=(256, 256)):
     """
     Resize image. Please use this resize logic for best results instead of the 
@@ -37,8 +45,9 @@ def resize_image(data, sz=(256, 256)):
     fh_im.seek(0)
     return bytearray(fh_im.read())
 
+
 def caffe_preprocess_and_compute(pimg, caffe_transformer=None, caffe_net=None,
-    output_layers=None):
+                                 output_layers=None):
     """
     Run a Caffe network on an input image after preprocessing it to prepare
     it for Caffe.
@@ -72,7 +81,7 @@ def caffe_preprocess_and_compute(pimg, caffe_transformer=None, caffe_net=None,
 
         input_name = caffe_net.inputs[0]
         all_outputs = caffe_net.forward_all(blobs=output_layers,
-                    **{input_name: transformed_image})
+                                            **{input_name: transformed_image})
 
         outputs = all_outputs[output_layers[0]][0].astype(float)
         return outputs
@@ -80,49 +89,37 @@ def caffe_preprocess_and_compute(pimg, caffe_transformer=None, caffe_net=None,
         return []
 
 
-def main(argv):
+def main():
+    file_type = ['jpg', 'jpeg', 'png']
     pycaffe_dir = os.path.dirname(__file__)
+    # filelists = ['123.png']
+    filelists = get_file('.')
+    print filelists
+    for file in filelists:
+        if file.split('.')[-1] in file_type:
+            image_data = open(file).read()
+            # Pre-load caffe model.
+            nsfw_net = caffe.Net('nsfw_model/deploy.prototxt', 'nsfw_model/resnet_50_1by2_nsfw.caffemodel', caffe.TEST)
 
-    parser = argparse.ArgumentParser()
-    # Required arguments: input file.
-    parser.add_argument(
-        "input_file",
-        help="Path to the input image file"
-    )
+            # Load transformer
+            # Note that the parameters are hard-coded for best results
+            caffe_transformer = caffe.io.Transformer({'data': nsfw_net.blobs['data'].data.shape})
+            caffe_transformer.set_transpose('data', (2, 0, 1))  # move image channels to outermost
+            caffe_transformer.set_mean('data',
+                                       np.array([104, 117, 123]))  # subtract the dataset-mean value in each channel
+            caffe_transformer.set_raw_scale('data', 255)  # rescale from [0, 1] to [0, 255]
+            caffe_transformer.set_channel_swap('data', (2, 1, 0))  # swap channels from RGB to BGR
 
-    # Optional arguments.
-    parser.add_argument(
-        "--model_def",
-        help="Model definition file."
-    )
-    parser.add_argument(
-        "--pretrained_model",
-        help="Trained model weights file."
-    )
+            # Classify.
+            scores = caffe_preprocess_and_compute(image_data, caffe_transformer=caffe_transformer, caffe_net=nsfw_net,
+                                                  output_layers=['prob'])
 
-    args = parser.parse_args()
-    image_data = open(args.input_file).read()
-
-    # Pre-load caffe model.
-    nsfw_net = caffe.Net(args.model_def,  # pylint: disable=invalid-name
-        args.pretrained_model, caffe.TEST)
-
-    # Load transformer
-    # Note that the parameters are hard-coded for best results
-    caffe_transformer = caffe.io.Transformer({'data': nsfw_net.blobs['data'].data.shape})
-    caffe_transformer.set_transpose('data', (2, 0, 1))  # move image channels to outermost
-    caffe_transformer.set_mean('data', np.array([104, 117, 123]))  # subtract the dataset-mean value in each channel
-    caffe_transformer.set_raw_scale('data', 255)  # rescale from [0, 1] to [0, 255]
-    caffe_transformer.set_channel_swap('data', (2, 1, 0))  # swap channels from RGB to BGR
-
-    # Classify.
-    scores = caffe_preprocess_and_compute(image_data, caffe_transformer=caffe_transformer, caffe_net=nsfw_net, output_layers=['prob'])
-
-    # Scores is the array containing SFW / NSFW image probabilities
-    # scores[1] indicates the NSFW probability
-    print "NSFW score:  " , scores[1]
-
+            # Scores is the array containing SFW / NSFW image probabilities
+            # scores[1] indicates the NSFW probability
+            print "NSFW score:  ", scores[1]
+            if scores[1]>=0.8:
+                print 'this must be the porn picture'
 
 
 if __name__ == '__main__':
-    main(sys.argv)
+    main()
